@@ -41,6 +41,15 @@
 
     const BASE_ALPHA = 0.36;
     const DENSITY_MULTIPLIER = 1.2;
+
+    // MacBook Pro 14-inch: 3024×1964 physical pixels = 1512×982 CSS pixels.
+    // Layout is always calculated on this fixed design canvas.
+    const DESIGN_WIDTH = 1512;
+    const DESIGN_HEIGHT = 982;
+
+    let viewportWidth = 0, viewportHeight = 0;
+    let viewportScale = 1, offsetX = 0, offsetY = 0;
+
     const rand = (a, b) => a + Math.random() * (b - a);
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const mix = (a, b, t) => a + (b - a) * t;
@@ -227,14 +236,22 @@
     }
 
     function reset(intro = false) {
-      width = window.innerWidth;
-      height = window.innerHeight;
+      // Keep a fixed MacBook Pro 14-inch layout; only scale the whole canvas.
+      viewportWidth = window.innerWidth;
+      viewportHeight = window.innerHeight;
+      width = DESIGN_WIDTH;
+      height = DESIGN_HEIGHT;
+      viewportScale = Math.min(viewportWidth / width, viewportHeight / height);
+      offsetX = (viewportWidth - width * viewportScale) / 2;
+      offsetY = (viewportHeight - height * viewportScale) / 2;
+
       dpr = Math.min(window.devicePixelRatio || 1, 2);
-      canvas.width = Math.round(width * dpr);
-      canvas.height = Math.round(height * dpr);
-      canvas.style.width = width + 'px';
-      canvas.style.height = height + 'px';
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      canvas.width = Math.round(viewportWidth * dpr);
+      canvas.height = Math.round(viewportHeight * dpr);
+      canvas.style.width = viewportWidth + 'px';
+      canvas.style.height = viewportHeight + 'px';
+      ctx.setTransform(dpr * viewportScale, 0, 0, dpr * viewportScale, dpr * offsetX, dpr * offsetY);
+
       computeLayout();
       dust = [];
       dragToggle.progress = dragToggle.visual = 0;
@@ -425,8 +442,18 @@
       const dt = clamp(lastFrame ? (now - lastFrame) / 16.67 : 1, 0.5, 2.0);
       lastFrame = now;
       ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
       ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, width, height);
+      // Fill the entire viewport, including letterbox areas.
+      ctx.fillRect(-offsetX / viewportScale, -offsetY / viewportScale,
+                   viewportWidth / viewportScale, viewportHeight / viewportScale);
+
+      // Restrict particles to the fixed 1512×982 design area.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 0, width, height);
+      ctx.clip();
+
       if (now - lastTick > 105) {
         const t = getDisplayTime();
         if (t !== timeText) setTime(t, now);
@@ -441,19 +468,29 @@
       for (const slot of slots) for (const p of slot.particles) drawParticle(p, now);
       renderDust(now, dt);
       ctx.globalAlpha = 1;
+      ctx.restore();
       pointer.vx *= 0.82;
       pointer.vy *= 0.82;
     }
 
+    // Convert physical pointer coordinates back to fixed design coordinates.
+    function getDesignPointer(e) {
+      return {
+        x: (e.clientX - offsetX) / viewportScale,
+        y: (e.clientY - offsetY) / viewportScale
+      };
+    }
+
     function updatePointer(e) {
       const now = performance.now();
+      const pos = getDesignPointer(e);
       if (pointer.lastMove && pointer.active) {
         const dt = Math.max(8, now - pointer.lastMove);
-        pointer.vx = clamp((e.clientX - pointer.x) * 16.67 / dt, -14, 14);
-        pointer.vy = clamp((e.clientY - pointer.y) * 16.67 / dt, -14, 14);
+        pointer.vx = clamp((pos.x - pointer.x) * 16.67 / dt, -14, 14);
+        pointer.vy = clamp((pos.y - pointer.y) * 16.67 / dt, -14, 14);
       }
-      pointer.x = e.clientX;
-      pointer.y = e.clientY;
+      pointer.x = pos.x;
+      pointer.y = pos.y;
       pointer.active = true;
       pointer.lastMove = now;
     }
@@ -466,8 +503,8 @@
       dragToggle.armed = true;
       dragToggle.active = false;
       dragToggle.moved = false;
-      dragToggle.startX = e.clientX;
-      dragToggle.startY = e.clientY;
+      dragToggle.startX = pointer.x;
+      dragToggle.startY = pointer.y;
       dragToggle.dx = 0;
       dragToggle.progress = 0;
       dragToggle.visual = 0;
@@ -478,8 +515,8 @@
     function onPointerMove(e) {
       updatePointer(e);
       if (dragToggle.pointerId !== e.pointerId || !dragToggle.armed) return;
-      const dx = e.clientX - dragToggle.startX;
-      const dy = e.clientY - dragToggle.startY;
+      const dx = pointer.x - dragToggle.startX;
+      const dy = pointer.y - dragToggle.startY;
       if (!dragToggle.active) {
         if (dx > 10 && dx > Math.abs(dy) * 1.1) {
           dragToggle.active = true;
